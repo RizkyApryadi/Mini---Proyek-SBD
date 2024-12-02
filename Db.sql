@@ -148,3 +148,135 @@ DELETE FROM Gudang;
 SELECT * FROM Barang;
 SELECT * FROM Pengguna;
 SELECT * FROM Gudang;
+
+--1. VIEW
+-- a. view dimana kita dapat melihat barang yang disimpan di Gudang
+-- membuat fungsi View Barang yang disimpan di Gudang
+CREATE OR REPLACE VIEW View_Barang_Gudang AS
+SELECT 
+    b.Barang_id,
+    b.Nama_barang,
+    b.Kategori,
+    b.Stok,
+    b.Harga_jual,
+    g.Nama_gudang,
+    g.Lokasi
+FROM Barang b
+JOIN Menyimpan m ON b.Barang_id = m.Barang_id
+JOIN Gudang g ON m.Gudang_id = g.Gudang_id;
+
+-- pemanggilan fungsi
+select * from View_Barang_Gudang;
+
+-- b. view dimana kita dapat melihat data transaksi stok
+-- membuat fungsi view transaksi stok
+CREATE OR REPLACE VIEW View_Transaksi_Stok AS
+SELECT 
+    ts.Transaksi_id,
+    ts.Barang_id,
+    b.Nama_barang,
+    ts.User_id,
+    p.Nama_pengguna,
+    ts.Jenis_transaksi,
+    ts.Stok_awal,
+    ts.Stok_akhir,
+    ts.Jumlah_barang,
+    ts.Tanggal_transaksi,
+    ts.Status_validasi
+FROM Transaksi_Stok ts
+JOIN Barang b ON ts.Barang_id = b.Barang_id
+JOIN Pengguna p ON ts.User_id = p.User_id;
+
+-- pemanggilan fungsi
+select * from View_Transaksi_Stok;
+
+-- 2. STORED PROCEDURE
+-- a. stored procedure untuk mengupdate stok barang
+CREATE OR REPLACE PROCEDURE Update_Stok_Barang(
+    IN p_barang_id INT,
+    IN p_user_id INT,
+    IN p_jenis_transaksi VARCHAR(50),
+    IN p_jumlah_barang INT
+)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    stok_awal INT;
+BEGIN
+    -- Ambil stok awal barang
+    SELECT Stok INTO stok_awal FROM Barang WHERE Barang_id = p_barang_id;
+
+    -- Update stok berdasarkan jenis transaksi
+    IF p_jenis_transaksi = 'Masuk' THEN
+        UPDATE Barang SET Stok = Stok + p_jumlah_barang WHERE Barang_id = p_barang_id;
+    ELSIF p_jenis_transaksi = 'Keluar' THEN
+        UPDATE Barang SET Stok = Stok - p_jumlah_barang WHERE Barang_id = p_barang_id;
+    END IF;
+
+    -- Catat transaksi stok
+    INSERT INTO Transaksi_Stok (
+        Barang_id, User_id, Jenis_transaksi, Stok_awal, Stok_akhir, Jumlah_barang, Tanggal_transaksi, Status_validasi
+    ) VALUES (
+        p_barang_id, p_user_id, p_jenis_transaksi, stok_awal, stok_awal + CASE
+            WHEN p_jenis_transaksi = 'Masuk' THEN p_jumlah_barang
+            ELSE -p_jumlah_barang
+        END, p_jumlah_barang, CURRENT_DATE, 'Valid'
+    );
+END;
+$$;
+
+CALL Update_Stok_Barang(1, 1, 'Masuk', 20);
+
+SELECT * FROM Barang WHERE Barang_id = 1;
+
+SELECT * FROM Transaksi_Stok WHERE Barang_id = 1;
+
+
+-- b. stored procedure untuk menambah barang pada gudang 
+CREATE OR REPLACE PROCEDURE Tambah_Barang_Gudang(
+    IN p_barang_id INT,
+    IN p_gudang_id INT
+)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    -- Tambahkan relasi barang dan gudang
+    INSERT INTO Menyimpan (Barang_id, Gudang_id) VALUES (p_barang_id, p_gudang_id);
+END;
+$$;
+
+CALL Tambah_Barang_Gudang(3, 3);
+
+select * from Menyimpan;
+
+-- 3. TRIGGER 
+-- Trigger untuk Menambahkan Peringatan Stok
+CREATE OR REPLACE FUNCTION Tambah_Peringatan_Stok() 
+RETURNS TRIGGER 
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF NEW.Stok < 10 THEN
+        INSERT INTO Peringatan_Stok (
+            Barang_id, Batas_stok_minimum, Tanggal_peringatan, Status_peringatan
+        ) VALUES (
+            NEW.Barang_id, 10, CURRENT_DATE, 'Aktif'
+        );
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER Trigger_Peringatan_Stok
+AFTER INSERT OR UPDATE ON Barang
+FOR EACH ROW
+EXECUTE FUNCTION Tambah_Peringatan_Stok();
+
+INSERT INTO Barang (Nama_barang, Status, Tanggal_stok_terakhir, Kategori, Stok, Harga_beli, Harga_jual, Deskripsi)
+VALUES ('Pensil', 'Tersedia', CURRENT_DATE, 'Alat Tulis', 5, 1000, 1500, 'Pensil HB berkualitas tinggi');
+
+UPDATE Barang
+SET Stok = 8
+WHERE Barang_id = 1;
+
+SELECT * FROM Peringatan_Stok;
